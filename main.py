@@ -2,7 +2,6 @@ import urllib
 import re
 import time
 import os
-import html
 from random import uniform
 from urllib.parse import urlencode
 
@@ -34,7 +33,7 @@ def get_cybenetics_links() -> DataFrame:
     url = base_url + "index.php?option=database&params=2,1,0"
     print(f"Loading {url}")
     request = session.get(url)
-    soup = BeautifulSoup(request.text, "html.parser")
+    soup = BeautifulSoup(request.text, "html5lib")
 
     table = soup.find(id="myTable")
     rows = table.find_all("tr")
@@ -54,7 +53,7 @@ def get_cybenetics_links() -> DataFrame:
             request = session.get(i)
             try:
                 table = soup.find(id="myTable")
-                soup = BeautifulSoup(request.text, "html.parser")
+                soup = BeautifulSoup(request.text, "html5lib")
                 table = soup.find(id="myTable")
                 rows = table.find_all("tr")
                 brandname = rows[0].find("th").text
@@ -136,7 +135,7 @@ def augment_cybenetics_reports(reports):
                 price = None
             except NoSuchElementException:
                 randsleep()
-                soup = BeautifulSoup(request.text, "html.parser")
+                soup = BeautifulSoup(request.text, "html5lib")
                 price = soup.find("div", {"id": "product0"})\
                             .find("div", {"class": "cell productlist__price"})\
                             .find("span", {"class": "gh_price"}).find("span").text

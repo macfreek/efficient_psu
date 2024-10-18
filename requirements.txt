@@ -3,3 +3,4 @@ bs4
 PyMuPDF
 pandas
 alive-progress
+html5lib
