@@ -1,3 +1,4 @@
+import logging
 import urllib
 import re
 import time
@@ -17,8 +18,8 @@ session = requests.Session()
 def randsleep():
     time.sleep(uniform(0.5, 2.5))
 
-
 def get_cybenetics_links() -> DataFrame:
+    logger = logging.getLogger('efficient_psu')
     if os.path.isfile("Reports.csv"):
         try:
             reports = read_csv("Reports.csv")
@@ -26,12 +27,12 @@ def get_cybenetics_links() -> DataFrame:
             if reports.empty:
                 return reports
         except EmptyDataError as err:
-            print(str(err))
+            logger.warning(str(err))
             pass
 
     base_url = "https://www.cybenetics.com/"
     url = base_url + "index.php?option=database&params=2,1,0"
-    print(f"Loading {url}")
+    logger.info(f"Loading {url}")
     request = session.get(url)
     soup = BeautifulSoup(request.text, "html5lib")
 
@@ -46,7 +47,7 @@ def get_cybenetics_links() -> DataFrame:
             if link:
                 brands.append(base_url + link["href"])
      
-    print("Fetching PSU report links...")
+    logger.info("Fetching PSU report links...")
     reports = []
     with alive_bar(len(brands)) as bar:
         for i in brands:
@@ -206,4 +207,5 @@ def main():
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     main()
