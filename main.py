@@ -1,16 +1,17 @@
-import pandas as pd
-import fitz
 import urllib
-from alive_progress import alive_bar
 import re
 import time
 import os
 import html
 from random import uniform
 from urllib.parse import urlencode
-import requests
-from bs4 import BeautifulSoup
 
+from alive_progress import alive_bar
+from bs4 import BeautifulSoup
+import fitz
+from pandas import DataFrame, read_csv, concat
+from pandas.errors import EmptyDataError
+import requests
 
 session = requests.Session()
 
