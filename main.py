@@ -129,7 +129,7 @@ else:
 
     randsleep()
     for psu in reports:
-        if re.match(".*(Sample|#\d+).*", psu["Model"]):
+        if re.match(r".*(Sample|#\d+).*", psu["Model"]):
             price = None
         else:
             params = {
