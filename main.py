@@ -119,6 +119,47 @@ def get_cybenetics_links() -> DataFrame:
 
 
 def augment_cybenetics_reports(reports):
+    df = DataFrame(columns=["Brand", "Model", "Form Factor", "Cybenetics Rating", "20W Efficiency", "40W Efficiency", "60W Efficiency", "80W Efficiency", "Report Link", "Lowest Price (Geizhals.de)"])
+    print("Fetching individual PSU data...")
+    with alive_bar(len(reports)) as bar:
+        for psu in reports:
+            response = requests.get(psu["Report Link"])
+            with open('/tmp/downloaded_pdf.pdf', 'wb') as pdf_file:
+                    pdf_file.write(response.content)
+            with open('/tmp/downloaded_pdf.pdf', 'rb') as file:
+                pdf_reader = fitz.open(file)
+                for page in pdf_reader:
+                    text = page.get_text()
+                    
+                    if not "20-80W LOAD TESTS" in text:
+                        continue
+                    title_count = -1
+                    for line in text.splitlines():
+                        title_count += 1
+                        if "20-80W LOAD TESTS" in line:
+                            break
+
+                    efficiency = [re.search(r"^.*%", line).group(0) for line in text.splitlines()[title_count:] if re.search(r"^.*%", line) is not None]
+
+                    df_new = DataFrame([{"Brand": psu['Brand'], 
+                                            "Model": psu['Model'], 
+                                            "Form Factor": psu['Form Factor'], 
+                                            "Cybenetics Rating": psu['Cybenetics Rating'], 
+                                            "20W Efficiency": efficiency[0],
+                                            "40W Efficiency": efficiency[1],
+                                            "60W Efficiency": efficiency[2],
+                                            "80W Efficiency": efficiency[3],
+                                            "Report Link": psu['Report Link'],
+                                            "Lowest Price (Geizhals.de)": psu['Lowest Price (Geizhals.de)']
+                                            }])
+                    df = concat([df, df_new], ignore_index=True)
+
+            open('/tmp/downloaded_pdf.pdf', 'w').close()
+            bar()
+    return df
+
+
+def augment_geizhals_prices(reports):
     if os.path.isfile("ReportsPriced.csv"):
         reports = read_csv("ReportsPriced.csv")
         reports = reports.to_dict('records')
@@ -170,47 +211,6 @@ def augment_cybenetics_reports(reports):
     return reports
 
 
-def augment_geizhals_prices(reports):
-    df = DataFrame(columns=["Brand", "Model", "Form Factor", "Cybenetics Rating", "20W Efficiency", "40W Efficiency", "60W Efficiency", "80W Efficiency", "Report Link", "Lowest Price (Geizhals.de)"])
-    print("Fetching individual PSU data...")
-    with alive_bar(len(reports)) as bar:
-        for psu in reports:
-            response = requests.get(psu["Report Link"])
-            with open('/tmp/downloaded_pdf.pdf', 'wb') as pdf_file:
-                    pdf_file.write(response.content)
-            with open('/tmp/downloaded_pdf.pdf', 'rb') as file:
-                pdf_reader = fitz.open(file)
-                for page in pdf_reader:
-                    text = page.get_text()
-                    
-                    if not "20-80W LOAD TESTS" in text:
-                        continue
-                    title_count = -1
-                    for line in text.splitlines():
-                        title_count += 1
-                        if "20-80W LOAD TESTS" in line:
-                            break
-
-                    efficiency = [re.search(r"^.*%", line).group(0) for line in text.splitlines()[title_count:] if re.search(r"^.*%", line) is not None]
-
-                    df_new = DataFrame([{"Brand": psu['Brand'], 
-                                            "Model": psu['Model'], 
-                                            "Form Factor": psu['Form Factor'], 
-                                            "Cybenetics Rating": psu['Cybenetics Rating'], 
-                                            "20W Efficiency": efficiency[0],
-                                            "40W Efficiency": efficiency[1],
-                                            "60W Efficiency": efficiency[2],
-                                            "80W Efficiency": efficiency[3],
-                                            "Report Link": psu['Report Link'],
-                                            "Lowest Price (Geizhals.de)": psu['Lowest Price (Geizhals.de)']
-                                            }])
-                    df = concat([df, df_new], ignore_index=True)
-
-            open('/tmp/downloaded_pdf.pdf', 'w').close()
-            bar()
-    return df
-
-
 def write_reports(data):
     print(data)
     data.to_csv("PSUs.csv", encoding='utf-8', index=False)
@@ -220,8 +220,10 @@ def main():
     reports = get_cybenetics_links()
     if reports.empty:
         return
-    augment_cybenetics_reports(reports)
-    reports = augment_geizhals_prices(reports)
+    # augment_cybenetics_reports(reports)
+    # reports = augment_geizhals_prices(reports)
+    # augment_amazon_prices(reports)
+    # augment_tweakers_prices(reports)
     write_reports(reports)
 
 
