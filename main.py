@@ -44,10 +44,10 @@ if os.path.isfile("Reports.csv"):
 else:
 
     base_url = "https://www.cybenetics.com/"
-    url = base_url + "index.php?option=database&params=2,1,"
     driver.get(url)
 
     soup = BeautifulSoup(driver.page_source, "html.parser")
+    url = base_url + "index.php?option=database&params=2,1,0"
 
     table = soup.find(id="myTable")
 
