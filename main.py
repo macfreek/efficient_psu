@@ -1,8 +1,3 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options 
-from selenium.webdriver.chrome.service import Service 
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.common.exceptions import NoSuchElementException
 import pandas as pd
 import fitz
 import urllib
@@ -12,26 +7,12 @@ import time
 import os
 import html
 from random import uniform
-from selenium.webdriver.common.by import By
 from urllib.parse import urlencode
 import requests
 from bs4 import BeautifulSoup
 
-service = Service(executable_path=r"/usr/local/bin/chromedriver")
 
-chrome_options = Options()
-options = [
-    "--disable-gpu",
-    "--window-size=1920,1200",
-    "--ignore-certificate-errors",
-    "--disable-extensions",
-    "--no-sandbox",
-    "--disable-dev-shm-usage",
-]
-for option in options:
-    chrome_options.add_argument(option)
-
-driver = webdriver.Chrome(service=service, options=chrome_options)
+session = requests.Session()
 
 def randsleep():
     time.sleep(uniform(0.5, 2.5))
@@ -44,10 +25,9 @@ if os.path.isfile("Reports.csv"):
 else:
 
     base_url = "https://www.cybenetics.com/"
-    driver.get(url)
-
-    soup = BeautifulSoup(driver.page_source, "html.parser")
     url = base_url + "index.php?option=database&params=2,1,0"
+    request = session.get(url)
+    soup = BeautifulSoup(request.text, "html.parser")
 
     table = soup.find(id="myTable")
 
@@ -65,17 +45,17 @@ else:
     reports = []
     with alive_bar(len(brands)) as bar:
         for i in brands:
-            driver.get(i)
+            request = session.get(i)
             try:
                 table = soup.find(id="myTable")
-                soup = BeautifulSoup(driver.page_source, "html.parser")
+                soup = BeautifulSoup(request.text, "html.parser")
                 table = soup.find(id="myTable")
                 rows = table.find_all("tr")
                 brandname = rows[0].find("th").text
             except (AttributeError, IndexError):
                 time.sleep(2)
                 table = soup.find(id="myTable")
-                soup = BeautifulSoup(driver.page_source, "html.parser")
+                soup = BeautifulSoup(request.text, "html.parser")
                 table = soup.find(id="myTable")
                 rows = table.find_all("tr")
                 brandname = rows[0].find("th").text
@@ -118,12 +98,11 @@ if os.path.isfile("ReportsPriced.csv"):
 
 else:
     print("Getting prices...")
-    driver.get("https://geizhals.de/?cat=gehps")
+    request = session.get("https://geizhals.de/?cat=gehps")
     # Click on 'Accept cookies'
     try:
-        cookie_accept = driver.find_element("id", "onetrust-accept-btn-handler")
+        request.text.find_element("id", "onetrust-accept-btn-handler")
         randsleep()
-        cookie_accept.click()
     except NoSuchElementException:
         pass
 
@@ -141,14 +120,14 @@ else:
                     }
             url = f"https://geizhals.de/?{urlencode(params)}"
             print(url)
-            driver.get(url)
+            request = session.get(url)
             randsleep()
             try:
                 no_results = driver.find_element(By.CLASS_NAME, "category_list__empty-list")
                 price = None
             except NoSuchElementException:
                 randsleep()
-                soup = BeautifulSoup(driver.page_source, "html.parser")
+                soup = BeautifulSoup(request.text, "html.parser")
                 price = soup.find("div", {"id": "product0"})\
                             .find("div", {"class": "cell productlist__price"})\
                             .find("span", {"class": "gh_price"}).find("span").text
