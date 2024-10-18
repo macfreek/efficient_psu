@@ -17,20 +17,25 @@ session = requests.Session()
 def randsleep():
     time.sleep(uniform(0.5, 2.5))
 
-           
-if os.path.isfile("Reports.csv"):
-    reports = pd.read_csv("Reports.csv")
-    reports = reports.to_dict('records')
 
-else:
+def get_cybenetics_links() -> DataFrame:
+    if os.path.isfile("Reports.csv"):
+        try:
+            reports = read_csv("Reports.csv")
+            reports = reports.to_dict('records')
+            if reports.empty:
+                return reports
+        except EmptyDataError as err:
+            print(str(err))
+            pass
 
     base_url = "https://www.cybenetics.com/"
     url = base_url + "index.php?option=database&params=2,1,0"
+    print(f"Loading {url}")
     request = session.get(url)
     soup = BeautifulSoup(request.text, "html.parser")
 
     table = soup.find(id="myTable")
-
     rows = table.find_all("tr")
 
     brands = []
@@ -87,16 +92,19 @@ else:
                             reports.append(entry)
             bar()
 
-
-    reports = pd.DataFrame.from_dict(reports)
+    reports = DataFrame.from_dict(reports)
     reports.to_csv("Reports.csv", encoding="utf-8", index=False)
 
+    return reports
 
-if os.path.isfile("ReportsPriced.csv"):
-    reports = pd.read_csv("ReportsPriced.csv")
-    reports = reports.to_dict('records')
 
-else:
+def augment_cybenetics_reports(reports):
+    if os.path.isfile("ReportsPriced.csv"):
+        reports = read_csv("ReportsPriced.csv")
+        reports = reports.to_dict('records')
+        if reports:
+            return reports
+
     print("Getting prices...")
     request = session.get("https://geizhals.de/?cat=gehps")
     # Click on 'Accept cookies'
@@ -136,25 +144,27 @@ else:
 
         psu["Lowest Price (Geizhals.de)"] = price
 
-    reports = pd.DataFrame.from_dict(reports)
+    reports = DataFrame.from_dict(reports)
     reports.to_csv("ReportsPriced.csv", encoding="utf-8", index=False)
 
+    return reports
 
-df = pd.DataFrame(columns=["Brand", "Model", "Form Factor", "Cybenetics Rating", "20W Efficiency", "40W Efficiency", "60W Efficiency", "80W Efficiency", "Report Link", "Lowest Price (Geizhals.de)"])
-print("Fetching individual PSU data...")
-with alive_bar(len(reports)) as bar:
-    for psu in reports:
-        response = requests.get(psu["Report Link"])
-        with open('/tmp/downloaded_pdf.pdf', 'wb') as pdf_file:
-                pdf_file.write(response.content)
-        with open('/tmp/downloaded_pdf.pdf', 'rb') as file:
-            pdf_reader = fitz.open(file)
-            for page in pdf_reader:
-                text = page.get_text()
-                
-                if not "20-80W LOAD TESTS" in text:
-                    continue
-                else:
+
+def augment_geizhals_prices(reports):
+    df = DataFrame(columns=["Brand", "Model", "Form Factor", "Cybenetics Rating", "20W Efficiency", "40W Efficiency", "60W Efficiency", "80W Efficiency", "Report Link", "Lowest Price (Geizhals.de)"])
+    print("Fetching individual PSU data...")
+    with alive_bar(len(reports)) as bar:
+        for psu in reports:
+            response = requests.get(psu["Report Link"])
+            with open('/tmp/downloaded_pdf.pdf', 'wb') as pdf_file:
+                    pdf_file.write(response.content)
+            with open('/tmp/downloaded_pdf.pdf', 'rb') as file:
+                pdf_reader = fitz.open(file)
+                for page in pdf_reader:
+                    text = page.get_text()
+                    
+                    if not "20-80W LOAD TESTS" in text:
+                        continue
                     title_count = -1
                     for line in text.splitlines():
                         title_count += 1
@@ -163,8 +173,7 @@ with alive_bar(len(reports)) as bar:
 
                     efficiency = [re.search(r"^.*%", line).group(0) for line in text.splitlines()[title_count:] if re.search(r"^.*%", line) is not None]
 
-
-                    df_new = pd.DataFrame([{"Brand": psu['Brand'], 
+                    df_new = DataFrame([{"Brand": psu['Brand'], 
                                             "Model": psu['Model'], 
                                             "Form Factor": psu['Form Factor'], 
                                             "Cybenetics Rating": psu['Cybenetics Rating'], 
@@ -175,16 +184,26 @@ with alive_bar(len(reports)) as bar:
                                             "Report Link": psu['Report Link'],
                                             "Lowest Price (Geizhals.de)": psu['Lowest Price (Geizhals.de)']
                                             }])
-                    df = pd.concat([df, df_new], ignore_index=True)
-                    break
-                break
+                    df = concat([df, df_new], ignore_index=True)
 
-                        
-
-
-        open('/tmp/downloaded_pdf.pdf', 'w').close()
-        bar()
+            open('/tmp/downloaded_pdf.pdf', 'w').close()
+            bar()
+    return df
 
 
-print(df)
-df.to_csv("PSUs.csv", encoding='utf-8', index=False)
+def write_reports(data):
+    print(data)
+    data.to_csv("PSUs.csv", encoding='utf-8', index=False)
+
+
+def main():
+    reports = get_cybenetics_links()
+    if reports.empty:
+        return
+    augment_cybenetics_reports(reports)
+    reports = augment_geizhals_prices(reports)
+    write_reports(reports)
+
+
+if __name__ == '__main__':
+    main()
