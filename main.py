@@ -23,8 +23,7 @@ def get_cybenetics_links() -> DataFrame:
     if os.path.isfile("Reports.csv"):
         try:
             reports = read_csv("Reports.csv")
-            reports = reports.to_dict('records')
-            if reports.empty:
+            if not reports.empty:
                 return reports
         except EmptyDataError as err:
             logger.warning(str(err))
@@ -37,61 +36,81 @@ def get_cybenetics_links() -> DataFrame:
     soup = BeautifulSoup(request.text, "html5lib")
 
     table = soup.find(id="myTable")
+    if not table:
+        logger.error(f"Could not find myTable at {url}")
+        return DataFrame()
     rows = table.find_all("tr")
 
     brands = []
     for r in rows:
-        header = r.find("th")
-        if header:
+        try:
+            header = r.find("th")
             link = header.find("a", href=True)
-            if link:
-                brands.append(base_url + link["href"])
-     
+            if not link:
+                continue
+        except (AttributeError, ValueError) as err:
+            continue
+        url = base_url + link["href"]
+        try:
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            if not params:
+                continue
+            brand_id = int(params['params'][0].split(',')[-1])
+            brands.append(brand_id)
+        except (AttributeError, ValueError, KeyError) as err:
+            logger.warning(f"Could not detect brand ID from {url}: {err}")
+
     logger.info("Fetching PSU report links...")
     reports = []
     with alive_bar(len(brands)) as bar:
-        for i in brands:
-            request = session.get(i)
+        for brand_id in brands:
+            url = f'{base_url}code/db2.php?manfID={brand_id}&cert=0&bdg=&volts=2'
+            request = session.get(url)
             try:
-                table = soup.find(id="myTable")
                 soup = BeautifulSoup(request.text, "html5lib")
-                table = soup.find(id="myTable")
-                rows = table.find_all("tr")
-                brandname = rows[0].find("th").text
-            except (AttributeError, IndexError):
-                time.sleep(2)
-                table = soup.find(id="myTable")
-                soup = BeautifulSoup(request.text, "html.parser")
-                table = soup.find(id="myTable")
-                rows = table.find_all("tr")
-                brandname = rows[0].find("th").text
-            modelname = ""
-            form_factor = ""
-            rating = ""
-            for r in rows:
-                header = r.find("th")
-                if header:
+                # table = soup.find(id="myTable")
+                rows = soup.find_all("tr")
+                brandname = soup.find("th", class_="title").text
+                logger.debug(f'Brand {brandname}: {len(rows)} rows')
+            except (AttributeError, IndexError) as err:
+                logger.warning(f"Could not parse table at {url}: {err}")
+                break
+            for index, row in enumerate(rows):
+                td = row.find_all("td")
+                if len(td) < 11:
                     continue
-
-                td = r.find_all("td")
-                if len(td) > 8:
-                    modelname = td[0].text
-                    form_factor = td[1].text
-                    rating = td[8].text
+                modelname = td[0].text.strip()
+                if not modelname:
+                    continue
+                form_factor = td[1].text.strip()
+                wattage = td[2].text.strip()
+                noise = td[7].text.strip()
+                pwr_rating = td[8].text.strip()
+                noise_rating = td[9].text.strip()
+                test_date = td[10].text.strip()
+                report_links = td[11].find_all('a')
+                if len(report_links) != 1:
+                    logger.warning(f"Found {len(report_links)} reports for {brandname} {modelname} on {url}")
+                if report_links:
+                    link = base_url + report_links[0]['href']
                 else:
-                    continue
-                links = r.find_all("a")
+                    link = None
 
-                for a in links:
-                    if a:
-                        download = a.get("download")
-                        if download:
-                            if "SHORT" in a.text:
-                                continue
-                            link = base_url + a.get("href")
-                            entry = {'Brand': brandname, 'Model': modelname, 'Form Factor': form_factor, 'Cybenetics Rating': rating, 'Report Link': link}
-                            reports.append(entry)
+                entry = {
+                    'Brand': brandname,
+                    'Model': modelname,
+                    'Form Factor': form_factor,
+                    'Power': wattage,
+                    'Noise (dB(A))': noise,
+                    'Cybenetics Power Rating': pwr_rating,
+                    'Cybenetics Noise Rating': noise_rating,
+                    'Test Date': test_date,
+                    'Report Link': link,
+                }
+                logger.debug(repr(entry))
+                reports.append(entry)
             bar()
+            randsleep()
 
     reports = DataFrame.from_dict(reports)
     reports.to_csv("Reports.csv", encoding="utf-8", index=False)
