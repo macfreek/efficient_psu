@@ -2,5 +2,5 @@ requests
 bs4
 PyMuPDF
 pandas
-alive-progress
+tqdm
 html5lib

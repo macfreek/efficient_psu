@@ -6,11 +6,16 @@ import os
 from random import uniform
 from urllib.parse import urlencode
 
-from alive_progress import alive_bar
 from bs4 import BeautifulSoup
 from pandas import DataFrame, read_csv, concat
 from pandas.errors import EmptyDataError
 import requests
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iter):
+        for a in iter:
+            yield a
 
 _downloader = None
 
@@ -84,57 +89,56 @@ def get_cybenetics_links() -> DataFrame:
 
     logger.info("Fetching PSU report links...")
     reports = []
-    with alive_bar(len(brands)) as bar:
-        for brand_id in brands:
-            url = f'{base_url}code/db2.php?manfID={brand_id}&cert=0&bdg=&volts=2'
-            try:
-                soup = download_url(url)
-            except Exception as err:
-                logger.error(f"Could not load {url}: {err}")
-                break
-            try:
-                # table = soup.find(id="myTable")
-                rows = soup.find_all("tr")
-                brandname = soup.find("th", class_="title").text
-                logger.debug(f'Brand {brandname}: {len(rows)} rows')
-            except (AttributeError, IndexError) as err:
-                logger.warning(f"Could not parse table at {url}: {err}")
-                break
-            for row in rows:
-                td = row.find_all("td")
-                if len(td) < 11:
-                    continue
-                modelname = td[0].text.strip()
-                if not modelname:
-                    continue
-                form_factor = td[1].text.strip()
-                wattage = td[2].text.strip()
-                noise = td[7].text.strip()
-                pwr_rating = td[8].text.strip()
-                noise_rating = td[9].text.strip()
-                test_date = td[10].text.strip()
-                report_links = td[11].find_all('a')
-                if len(report_links) != 1:
-                    logger.warning(f"Found {len(report_links)} reports for {brandname} {modelname} on {url}")
-                if report_links:
-                    link = base_url + report_links[0]['href']
-                else:
-                    link = None
+    for brand_id in tqdm(brands):
+    for brand_id in brands:
+        url = f'{base_url}code/db2.php?manfID={brand_id}&cert=0&bdg=&volts=2'
+        try:
+            soup = download_url(url)
+        except Exception as err:
+            logger.error(f"Could not load {url}: {err}")
+            break
+        try:
+            # table = soup.find(id="myTable")
+            rows = soup.find_all("tr")
+            brandname = soup.find("th", class_="title").text
+            logger.debug(f'Brand {brandname}: {len(rows)} rows')
+        except (AttributeError, IndexError) as err:
+            logger.warning(f"Could not parse table at {url}: {err}")
+            break
+        for row in rows:
+            td = row.find_all("td")
+            if len(td) < 11:
+                continue
+            modelname = td[0].text.strip()
+            if not modelname:
+                continue
+            form_factor = td[1].text.strip()
+            wattage = td[2].text.strip()
+            noise = td[7].text.strip()
+            pwr_rating = td[8].text.strip()
+            noise_rating = td[9].text.strip()
+            test_date = td[10].text.strip()
+            report_links = td[11].find_all('a')
+            if len(report_links) != 1:
+                logger.warning(f"Found {len(report_links)} reports for {brandname} {modelname} on {url}")
+            if report_links:
+                link = base_url + report_links[0]['href']
+            else:
+                link = None
 
-                entry = {
-                    'Brand': brandname,
-                    'Model': modelname,
-                    'Form Factor': form_factor,
-                    'Power': wattage,
-                    'Noise (dB(A))': noise,
-                    'Cybenetics Power Rating': pwr_rating,
-                    'Cybenetics Noise Rating': noise_rating,
-                    'Test Date': test_date,
-                    'Report Link': link,
-                }
-                logger.debug(repr(entry))
-                reports.append(entry)
-            bar()
+            entry = {
+                'Brand': brandname,
+                'Model': modelname,
+                'Form Factor': form_factor,
+                'Power': wattage,
+                'Noise (dB(A))': noise,
+                'Cybenetics Power Rating': pwr_rating,
+                'Cybenetics Noise Rating': noise_rating,
+                'Test Date': test_date,
+                'Report Link': link,
+            }
+            logger.debug(repr(entry))
+            reports.append(entry)
 
     reports = DataFrame.from_dict(reports)
     reports.to_csv("Reports.csv", encoding="utf-8", index=False)
@@ -162,88 +166,86 @@ def augment_cybenetics_reports(reports: DataFrame):
     for power in EXPECTED_POWER:
         reports[f"{power} Noise"] =  len(reports)*[None]
     reports[f"Test Volt"] =  len(reports)*[None]
-    with alive_bar(len(reports)) as bar:
-        for idx, psu in tqdm(reports.iterrows()):
-            url = psu["Report Link"]
-            if not str(url).startswith('http'):
+    for idx, psu in tqdm(reports.iterrows()):
+        url = psu["Report Link"]
+        if not str(url).startswith('http'):
+            continue
+        try:
+            soup = download_url(url)
+        except Exception as err:
+            logger.error(f"Could not load {url}: {err}")
+            return
+        try:
+            # table = soup.find(id="myTable")
+            section = soup.find(id='supllem-1')
+            header = section.find('h3').text
+            if not header or not header.startswith('Light Load Tests'):
+                logging.error(f"Expected Light Load Test section in {url}. Found {header!r}")
                 continue
-            try:
-                soup = download_url(url)
-            except Exception as err:
-                logger.error(f"Could not load {url}: {err}")
-                return
-            try:
-                # table = soup.find(id="myTable")
-                section = soup.find(id='supllem-1')
-                header = section.find('h3').text
-                if not header or not header.startswith('Light Load Tests'):
-                    logging.error(f"Expected Light Load Test section in {url}. Found {header!r}")
-                    continue
-                tables = section.find_all('table')
-                # print(url, len(tables), header)
-                if not tables:
-                    logging.error(f"Could not find Light Load Test table in {url}")
-                    continue
-                table = tables[-1]
-                # table = section.find(id='nav-YimmShBtm8-20-80-230')
-                rows = table.find_all("tr")
-                wall_power = table.find_all("td")[-1].text
-                reports.at[idx,f"Test Volt"] = roundto(wall_power, suffix="V")
-            except (AttributeError, IndexError) as err:
-                logger.warning(f"Could not parse table at {url}: {err}")
-                return
+            tables = section.find_all('table')
+            # print(url, len(tables), header)
+            if not tables:
+                logging.error(f"Could not find Light Load Test table in {url}")
+                continue
+            table = tables[-1]
+            # table = section.find(id='nav-YimmShBtm8-20-80-230')
+            rows = table.find_all("tr")
+            wall_power = table.find_all("td")[-1].text
+            reports.at[idx,f"Test Volt"] = roundto(wall_power, suffix="V")
+        except (AttributeError, IndexError) as err:
+            logger.warning(f"Could not parse table at {url}: {err}")
+            return
 
-            if len(rows) <= 2:
-                logger.warning(f"Can not parse table Light Load Tests in {url}: expected 9 rows, Found {len(rows)}")
+        if len(rows) <= 2:
+            logger.warning(f"Can not parse table Light Load Tests in {url}: expected 9 rows, Found {len(rows)}")
+            continue
+        td = rows[0].find_all("td")
+        if len(td) < 9:
+            logger.warning(f"Can not parse table Light Load Tests in {url}: expected 11 columns, Found {len(td)}")
+            continue
+        if not td[0].text.startswith('Test'):
+            logger.warning(f"Expected Column 'Test' in Light Load Tests on {url}. Got {td[0].text!r}")
+            continue
+        if td[6].text != 'Efficiency':
+            logger.warning(f"Expected Column 'Efficiency' in Light Load Tests on {url}. Got {td[6].text!r}")
+            continue
+        if 'Watts' not in td[5].text:
+            logger.warning(f"Expected Column 'DC/AC (Watts)' in Light Load Tests on {url}. Got {td[5].text!r}")
+            continue
+        if len(td) > 7 and 'Noise' in td[8].text:
+            noise_col = 8
+        else:
+            logger.warning(f"Expected Column 'PSU Noise' in Light Load Tests on {url}. Got {td[8].text!r}")
+            noise_col = None
+
+
+        for row in rows[1:]:
+            td = row.find_all("td")
+            if not td[0].attrs.get('rowspan'):
                 continue
-            td = rows[0].find_all("td")
-            if len(td) < 9:
+            if len(td) < 8:
                 logger.warning(f"Can not parse table Light Load Tests in {url}: expected 11 columns, Found {len(td)}")
                 continue
-            if not td[0].text.startswith('Test'):
-                logger.warning(f"Expected Column 'Test' in Light Load Tests on {url}. Got {td[0].text!r}")
+            power = roundto(td[5].text, suffix='W')
+            if power is None:
+                logger.error(f"Expected Power in Watts in Light Load Tests on {url}. Got {td[5].text!r}")
                 continue
-            if td[6].text != 'Efficiency':
-                logger.warning(f"Expected Column 'Efficiency' in Light Load Tests on {url}. Got {td[6].text!r}")
+            testname = td[0].text
+            if testname not in (power, '1', '2', '3', '4', '5', '6', '7', '8'):
+                logger.warning(f"Light Load Tests {testname!r} on {url} measured {td[5].text} Watt.")
+                # continue
+            if power not in EXPECTED_POWER:
+                logger.warning(f"Skip Light Load Tests {testname!r} on {url} with {power} Watt.")
                 continue
-            if 'Watts' not in td[5].text:
-                logger.warning(f"Expected Column 'DC/AC (Watts)' in Light Load Tests on {url}. Got {td[5].text!r}")
-                continue
-            if len(td) > 7 and 'Noise' in td[8].text:
-                noise_col = 8
+            efficiency = td[6].text
+            if noise_col is None:
+                noise = None
             else:
-                logger.warning(f"Expected Column 'PSU Noise' in Light Load Tests on {url}. Got {td[8].text!r}")
-                noise_col = None
-
-
-            for row in rows[1:]:
-                td = row.find_all("td")
-                if not td[0].attrs.get('rowspan'):
-                    continue
-                if len(td) < 8:
-                    logger.warning(f"Can not parse table Light Load Tests in {url}: expected 11 columns, Found {len(td)}")
-                    continue
-                power = roundto(td[5].text, suffix='W')
-                if power is None:
-                    logger.error(f"Expected Power in Watts in Light Load Tests on {url}. Got {td[5].text!r}")
-                    continue
-                testname = td[0].text
-                if testname not in (power, '1', '2', '3', '4', '5', '6', '7', '8'):
-                    logger.warning(f"Light Load Tests {testname!r} on {url} measured {td[5].text} Watt.")
-                    # continue
-                if power not in EXPECTED_POWER:
-                    logger.warning(f"Skip Light Load Tests {testname!r} on {url} with {power} Watt.")
-                    continue
-                efficiency = td[6].text
-                if noise_col is None:
-                    noise = None
-                else:
-                    noise = td[8].text
-                reports.at[idx,f"{power} Efficiency"] = efficiency
-                reports.at[idx,f"{power} Noise"] = noise
-            # if idx > 20:
-            #     break
-        bar()
+                noise = td[8].text
+            reports.at[idx,f"{power} Efficiency"] = efficiency
+            reports.at[idx,f"{power} Noise"] = noise
+        # if idx > 20:
+        #     break
 
         reports.to_csv("ReportsEfficiency.csv", encoding="utf-8", index=False)
         logger.info(f'Write {len(reports)} reports with {len(reports.columns)} columns to ReportsEfficiency.csv')
