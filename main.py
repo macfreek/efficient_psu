@@ -17,6 +17,12 @@ except ImportError:
         for a in iter:
             yield a
 
+try:
+    # local module, see https://github.com/macfreek/game-db-manager/blob/main/downloader.py.
+    from downloader import CachedDownloader
+    _has_cached_downloader = True
+except ImportError:
+    _has_cached_downloader = False
 _downloader = None
 
 def randsleep():
@@ -39,8 +45,12 @@ def roundto(num, step=5, suffix="") -> str:
 
 
 def download_url(url: str) -> BeautifulSoup:
-    randsleep()
-    html = _downloader.get(url).text
+    if _has_cached_downloader:
+        global _downloader
+        html = _downloader.get_cached_url(url)
+    else:
+        randsleep()
+        html = _downloader.get(url).text
     soup = BeautifulSoup(html, "html5lib")
     return soup
 
@@ -319,5 +329,8 @@ def main():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    _downloader = requests.Session()
+    if _has_cached_downloader:
+        _downloader = CachedDownloader(delay=1.5)
+    else:
+        _downloader = requests.Session()
     main()
