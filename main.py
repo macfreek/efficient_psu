@@ -167,6 +167,56 @@ def get_cybenetics_links() -> DataFrame:
     return reports
 
 
+def properties_from_table(soup: BeautifulSoup, sectionid, sectionname, url, logger: logging.Logger) -> dict:
+    """Look for a table in the section with given id.
+    Assume each row has two fields: key: value
+    Return a dict with key: values
+    sectionname is used to check if it matches the table header.
+    url is used for logging only."""
+    try:
+        section = soup.find(id=sectionid)
+        header = section.find('h3').text
+        if not header or not header.startswith(sectionname):
+            logger.error(f"Expected {sectionname} section in {url}. Found {header!r}")
+            return
+        tables = section.find_all('table')
+        if not tables:
+            logger.warning(f"Expected 1 {sectionname} table in {url}. Found 0 tables.")
+            return
+        if len(tables) > 2:
+            logger.warning(f"Expected 1 {sectionname} table in {url}. Found {len(tables)} tables.")
+    except (AttributeError, IndexError) as err:
+        logger.warning(f"Could not parse table at {url}: {err}")
+        return
+    properties = {}
+    for table in tables:
+        rows = table.find_all("tr")
+        if len(rows) == 0:
+            logger.warning(f"{sectionname} table in {url} is empty. Found 0 rows")
+            continue
+        for row_idx, row in enumerate(rows):
+            td = row.find_all("td")
+            if len(td) != 2:
+                logger.warning(f"Skip row {row_idx} in {sectionname} in {url}: expected 2 fields (property and value). Found {len(td)} fields: {td}")
+                continue
+            key = td[0].text
+            value = td[1].text
+            if not key:
+                logger.warning(f"Skip row {row_idx} in {sectionname} in {url}: property name is empty")
+                continue
+            # if not value:
+            #     logger.warning(f"Skip row {row_idx} in {sectionname} in {url}: value of property {key} is empty")
+            #     continue
+            if len(key) > 30:
+                logger.warning(f"Skip row {row_idx} in {sectionname} in {url}: property name is too long: {key[:30]}...")
+                continue
+            if len(value) > 100:
+                logger.warning(f"Skip row {row_idx} in {sectionname} in {url}: property value is too long: {key[:40]}...")
+                continue
+            properties[key] = value
+    return properties
+
+
 def iter_testresults(soup: BeautifulSoup, url, logger: logging.Logger) -> Iterable[TestResult]:
     """Given an element, walk all tables in reverse order (so 230V result comes first),
     yielding all test results. Log unexpected parsing issue to the given logger.
@@ -301,6 +351,7 @@ def augment_cybenetics_reports(reports: DataFrame):
 
     logging.info("Fetching individual PSU data...")
     # Add empty column to all records
+    reports[f"Cable Design"] =  len(reports)*[None]
     EXPECTED_POWER = ('20W', '40W', '60W', '80W')
     for power in EXPECTED_POWER:
         reports[f"{power} Efficiency"] =  len(reports)*[None]
@@ -309,14 +360,21 @@ def augment_cybenetics_reports(reports: DataFrame):
     reports[f"Test Volt"] =  len(reports)*[None]
     for idx, psu in tqdm(reports.iterrows(), total=len(reports)):
         url = psu["Report Link"]
+        if not url:
+            continue
         if not str(url).startswith('http'):
+            logger.error(f"Invalid URL {url}. Only http(s) is supported.")
             continue
         try:
             soup = download_url(url)
         except Exception as err:
             logger.error(f"Could not load {url}: {err}")
             return
-        
+
+        properties = properties_from_table(soup, 'general-1', 'DUT Specifications', url, logger)
+        if properties.get('Cable Design'):
+            reports.at[idx ,"Cable Design"] = properties['Cable Design']
+
         voltages = set()
         missing_power = set(EXPECTED_POWER)
         for result in iter_testresults(soup, url, logger):
