@@ -27,6 +27,17 @@ except ImportError:
     _has_cached_downloader = False
 _downloader = None
 
+# include both 230V and 115V certified PSUs, prefer 115V results
+# PREFERRED_WALL_POWER = ('115V', '230V')
+# include both 230V and 115V certified PSUs, prefer 230V results
+PREFERRED_WALL_POWER = ('230V', '115V')
+# include only 115V certified PSUs (note: it may still report 230V results [*])
+# PREFERRED_WALL_POWER = ('115V',)
+# include only 230V certified PSUs (note: it may still report 115V results [*])
+# PREFERRED_WALL_POWER = ('230V',)
+# [*] Note: A PSU may be both 115V and 230V certified, but the light load test is supplementary,
+# meaning it may not be tested for certification, or only for 115V.
+# In that case, the PSU is included in the list of 230V PSUs, with the 115V result.
 
 @dataclass
 class TestResult:
@@ -80,39 +91,44 @@ def get_cybenetics_links() -> DataFrame:
             pass
 
     base_url = "https://www.cybenetics.com/"
-    url = base_url + "index.php?option=database&params=2,1,0"
-    logger.info(f"Loading {url}")
-    soup = download_url(url)
-
-    table = soup.find(id="myTable")
-    if not table:
-        logger.error(f"Could not find myTable at {url}")
-        return DataFrame()
-    rows = table.find_all("tr")
+    urls = []
+    volt_to_id = {'115V': '1', '230V': '2'}
+    for volt in PREFERRED_WALL_POWER:
+        volt_id = volt_to_id[volt]
+        urls.append(f"{base_url}index.php?option=database&params={volt_id},1,0")
 
     brands = []
-    for r in rows:
-        try:
-            header = r.find("th")
-            link = header.find("a", href=True)
-            if not link:
+    for url in urls:
+        logger.info(f"Loading {url}")
+        soup = download_url(url)
+
+        table = soup.find(id="myTable")
+        if not table:
+            logger.error(f"Could not find myTable at {url}")
+            return DataFrame()
+        rows = table.find_all("tr")
+
+        for r in rows[3:]:
+            try:
+                header = r.find("th")
+                link = header.find("a", href=True)
+                assert link
+            except (AttributeError, ValueError, AssertionError) as err:
                 continue
-        except (AttributeError, ValueError) as err:
-            continue
-        url = base_url + link["href"]
-        try:
-            params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
-            if not params:
-                continue
-            brand_id = int(params['params'][0].split(',')[-1])
-            brands.append(brand_id)
-        except (AttributeError, ValueError, KeyError) as err:
-            logger.warning(f"Could not detect brand ID from {url}: {err}")
+            url = base_url + link["href"]
+            try:
+                params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+                if not params:
+                    continue
+                brand_id = int(params['params'][0].split(',')[-1])
+                brands.append((brand_id, volt_id))
+            except (AttributeError, ValueError, KeyError) as err:
+                logger.warning(f"Could not detect brand ID from {url}: {err}")
 
     logger.info("Fetching PSU report links...")
-    reports = []
-    for brand_id in tqdm(brands):
-        url = f'{base_url}code/db2.php?manfID={brand_id}&cert=0&bdg=&volts=2'
+    entries = {}
+    for brand_id, volt_id in tqdm(brands):
+        url = f'{base_url}code/db2.php?manfID={brand_id}&cert=0&bdg=&volts={volt_id}'
         try:
             soup = download_url(url)
         except Exception as err:
@@ -126,9 +142,11 @@ def get_cybenetics_links() -> DataFrame:
         except (AttributeError, IndexError) as err:
             logger.warning(f"Could not parse table at {url}: {err}")
             break
-        for row in rows:
+        for row in rows[2:]:
             td = row.find_all("td")
-            if len(td) < 11:
+            if len(td) < 12:
+                if 'No records found' not in row.text:
+                    logger.warning(f"Found row with only {len(td)} properties for {brandname} {modelname} on {url}: {row}")
                 continue
             modelname = td[0].text.strip()
             if not modelname:
@@ -139,17 +157,32 @@ def get_cybenetics_links() -> DataFrame:
             pwr_rating = td[8].text.strip()
             noise_rating = td[9].text.strip()
             test_date = td[10].text.strip()
-            report_links = td[11].find_all('a')
-            if len(report_links) != 1:
-                logger.warning(f"Found {len(report_links)} reports for {brandname} {modelname} on {url}")
-            if report_links:
-                link = base_url + report_links[0]['href']
+            links = td[12].find_all('a')
+            if len(links) != 1:
+                logger.warning(f"Found {len(links)} comparison links for {brandname} {modelname} on {url}")
+                continue
+            model_link = links[0].get('id')
+            model_parts = model_link.split('^^')
+            if len(model_parts) != 3:
+                logger.warning(f"Unexpected identifier for {brandname} {modelname} on {url}. Expected '1^^id^^Name'. Found {model_link}")
+                continue
+            model_id = int(model_parts[1])
+            links = td[11].find_all('a')
+            if not links:
+                link = f'{base_url}evaluations/psus/{model_id}/'
+                logger.warning(f"Found no reports links for {brandname} {modelname} on {url}. Guess {link}")
             else:
-                link = None
+                if len(links) > 1:
+                    logger.warning(f"Found {len(links)} reports for {brandname} {modelname} on {url}")
+                link = base_url + links[0]['href']
 
-            entry = {
+
+            if model_id in entries:
+                continue
+            entries[model_id] = {
                 'Brand': brandname,
                 'Model': modelname,
+                'Cybenetics ID': model_id,
                 'Form Factor': form_factor,
                 'Power': wattage,
                 'Noise (dB(A))': noise,
@@ -158,10 +191,10 @@ def get_cybenetics_links() -> DataFrame:
                 'Test Date': test_date,
                 'Report Link': link,
             }
-            logger.debug(repr(entry))
-            reports.append(entry)
+            logger.debug(repr(entries[model_id]))
+            # reports.append(entry)
 
-    reports = DataFrame.from_dict(reports)
+    reports = DataFrame.from_dict(list(entries.values()))
     reports.to_csv("Reports.csv", encoding="utf-8", index=False)
     logger.info(f'Write {len(reports)} reports with {len(reports.columns)} columns to Reports.csv')
     return reports
@@ -238,7 +271,13 @@ def iter_testresults(soup: BeautifulSoup, url, logger: logging.Logger) -> Iterab
     except (AttributeError, IndexError) as err:
         logger.warning(f"Could not parse table at {url}: {err}")
         return
-    for table_idx, table in reversed(list(enumerate(tables))):
+    if PREFERRED_WALL_POWER[0] == '230V':
+        # start with last table (which contains 230V info)
+        table_iterator = reversed(list(enumerate(tables)))
+    else:
+        # start with first table (which contains 115V info)
+        table_iterator = enumerate(tables)
+    for table_idx, table in table_iterator:
         table_idx += 1  # Use human numbering 1, 2, 3, ... instead of 0, 1, 2, ...
         rows = table.find_all("tr")
         if len(rows) <= 2:
