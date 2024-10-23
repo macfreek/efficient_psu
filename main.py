@@ -287,6 +287,11 @@ def iter_testresults(soup: BeautifulSoup, url, logger: logging.Logger) -> Iterab
         # examine header (first row)
         _, row = next(row_iterator)
         td = row.find_all("td")
+        if len(td) < 8 and len(td) >= 1:
+            if td[0].get('colspan'):
+                # Extra full-width row with details about the test. Skip row.
+                _, row = next(row_iterator)
+                td = row.find_all("td")
         if len(td) < 8:
             logger.warning(f"Skip Light Load Tests table #{table_idx} in {url}: expected 11 columns, Found {len(td)}")
             continue
