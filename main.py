@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from random import uniform
 from urllib.parse import urlencode
-from typing import Optional, Iterable
+from typing import Optional, Iterable, Tuple
 
 from bs4 import BeautifulSoup
 from pandas import DataFrame, read_csv, concat
@@ -91,14 +91,26 @@ def get_cybenetics_links() -> DataFrame:
             pass
 
     base_url = "https://www.cybenetics.com/"
-    urls = []
-    volt_to_id = {'115V': '1', '230V': '2'}
-    for volt in PREFERRED_WALL_POWER:
-        volt_id = volt_to_id[volt]
-        urls.append(f"{base_url}index.php?option=database&params={volt_id},1,0")
-
     brands = []
-    for url in urls:
+    test_suites = [
+        ('115V', 'ETA & LAMBDA', '1'),
+        ('230V', 'ETA & LAMBDA', '2'),
+        # ('230V', 'ETA(REDUNDANT)', '3'),  # server power supplies
+        # ('115V', 'ATX V3.0', '4'),  # subset of ETA & LAMBDA
+        # ('230V', 'ATX V3.0', '5'),  # subset of ETA & LAMBDA
+        # ('115V', 'ATX V3.1', '6'),  # subset of ETA & LAMBDA
+        # ('230V', 'ATX V3.1', '7'),  # subset of ETA & LAMBDA
+    ]
+    def _suite_sorter(suite: Tuple) -> Tuple:
+        # start with first voltage in PREFERRED_WALL_POWER. Use last index as tie-breaker.
+        return ((list(PREFERRED_WALL_POWER)+[suite[0]]).index(suite[0]), suite[2])
+    
+    for volt, test_name, volt_id  in sorted(test_suites, key=_suite_sorter):
+        url = f"{base_url}index.php?option=database&params={volt_id},1,0"
+        if volt not in PREFERRED_WALL_POWER:
+            continue
+
+        new_brands = []
         logger.info(f"Loading {url}")
         soup = download_url(url)
 
@@ -115,19 +127,23 @@ def get_cybenetics_links() -> DataFrame:
                 assert link
             except (AttributeError, ValueError, AssertionError) as err:
                 continue
-            url = base_url + link["href"]
+            brand_url = base_url + link["href"]
             try:
-                params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+                params = urllib.parse.parse_qs(urllib.parse.urlparse(brand_url).query)
                 if not params:
                     continue
                 brand_id = int(params['params'][0].split(',')[-1])
-                brands.append((brand_id, volt_id))
+                new_brands.append((brand_id, volt_id))
             except (AttributeError, ValueError, KeyError) as err:
                 logger.warning(f"Could not detect brand ID from {url}: {err}")
+        logger.debug(f'Overview {url} gave {len(new_brands)} new brand-specific pages')
+        brands.extend(new_brands)
 
     logger.info("Fetching PSU report links...")
     entries = {}
     for brand_id, volt_id in tqdm(brands):
+        new_entries = []
+        existing_id_count = 0
         url = f'{base_url}code/db2.php?manfID={brand_id}&cert=0&bdg=&volts={volt_id}'
         try:
             soup = download_url(url)
@@ -138,7 +154,6 @@ def get_cybenetics_links() -> DataFrame:
             # table = soup.find(id="myTable")
             rows = soup.find_all("tr")
             brandname = soup.find("th", class_="title").text
-            logger.debug(f'Brand {brandname}: {len(rows)} rows')
         except (AttributeError, IndexError) as err:
             logger.warning(f"Could not parse table at {url}: {err}")
             break
@@ -178,6 +193,7 @@ def get_cybenetics_links() -> DataFrame:
 
 
             if model_id in entries:
+                existing_id_count += 1
                 continue
             entries[model_id] = {
                 'Brand': brandname,
@@ -191,9 +207,10 @@ def get_cybenetics_links() -> DataFrame:
                 'Test Date': test_date,
                 'Report Link': link,
             }
-            logger.debug(repr(entries[model_id]))
-            # reports.append(entry)
+            new_entries.append(model_id)
+            # logger.debug(repr(entries[model_id]))
 
+        logger.debug(f'Brand {brandname!r} page {url} gave {len(new_entries)} new models: {new_entries}. Skipped {existing_id_count} models')
     reports = DataFrame.from_dict(list(entries.values()))
     reports.to_csv("Reports.csv", encoding="utf-8", index=False)
     logger.info(f'Write {len(reports)} reports with {len(reports.columns)} columns to Reports.csv')
@@ -370,6 +387,14 @@ def iter_testresults(soup: BeautifulSoup, url, logger: logging.Logger) -> Iterab
                 if len(noise) > 20:
                     logger.warning(f"Ignore noise in Light Load Tests table #{table_idx} in {url}: expected noise in dB(A). Found {noise[:50]!r}....")
                     noise = None
+                noise = noise.strip()
+                if noise.startswith('|'):
+                    noise = '<' + noise[1:]
+                try:
+                    _ = float(noise.strip('< '))
+                except ValueError as err:
+                    logger.warning(f'Expected float for noise level in {url}: Found {noise!r}')
+                    noise = None
             voltage = roundto(next_td[-1].text, suffix="V")
             if not voltage or voltage == '0V':
                 logger.warning(f"Skip rows {row_idx}-{row_idx+1} in Light Load Tests table #{table_idx} in {url}: Expected Test Voltage. Found {next_td[-1].text!r}.")
@@ -510,10 +535,20 @@ def main():
     write_reports(reports)
 
 
+def test_page(model_id):
+    url = f'https://www.cybenetics.com/evaluations/psus/{model_id}/'
+    soup = download_url(url)
+    logger = logging.getLogger('efficient_psu')
+    for result in iter_testresults(soup, url, logger):
+        print(result)
+
+
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.ERROR)
     if _has_cached_downloader:
         _downloader = CachedDownloader(delay=1.5)
+        _downloader.logger.setLevel(logging.WARNING)
     else:
         _downloader = requests.Session()
     main()
+    # test_page(149)
