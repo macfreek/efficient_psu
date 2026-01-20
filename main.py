@@ -172,16 +172,21 @@ def get_cybenetics_links() -> DataFrame:
             pwr_rating = td[8].text.strip()
             noise_rating = td[9].text.strip()
             test_date = td[10].text.strip()
-            links = td[12].find_all('a')
-            if len(links) != 1:
-                logger.warning(f"Found {len(links)} comparison links for {brandname} {modelname} on {url}")
+            model_id = None
+            if model_id is None:
+                report_links = td[11].find_all('a')
+                if report_links:
+                    href = report_links[0]['href']
+                    id_match = re.search(r'/psus/(\d+)/', href)
+                    if id_match:
+                        model_id = int(id_match.group(1))
+                    else:
+                        id_match = re.search(r'params=[\d,]+,(\d+)', href)
+                        if id_match:
+                            model_id = int(id_match.group(1))
+            if model_id is None:
+                logger.warning(f"Could not find valid Model ID for {brandname} {modelname} in either Compare or Report columns. Skipping.")
                 continue
-            model_link = links[0].get('id')
-            model_parts = model_link.split('^^')
-            if len(model_parts) != 3:
-                logger.warning(f"Unexpected identifier for {brandname} {modelname} on {url}. Expected '1^^id^^Name'. Found {model_link}")
-                continue
-            model_id = int(model_parts[1])
             links = td[11].find_all('a')
             if not links:
                 link = f'{base_url}evaluations/psus/{model_id}/'
